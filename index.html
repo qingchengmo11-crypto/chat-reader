@@ -59,6 +59,7 @@
         <label>对方显示成<input id="nAi" type="text" value="对方"></label>
       </div>
       <label class="dim" style="display:block;margin-top:12px"><input id="allBr" type="checkbox"> 把重试过、改过的旧版本也一起显示（默认只显示最后留下的那一版）</label>
+      <label class="dim" style="display:block;margin-top:6px"><input id="showAll" type="checkbox"> 把没有正文的消息也显示出来（空的、只用了工具的；想查少了什么的时候再开）</label>
       <div id="msg" class="dim"></div>
     </div>
     <div id="listWrap" class="hide">
@@ -106,16 +107,20 @@ function readMsg(m) {
   const raw = !text && !thinks.length && !extras.length ? JSON.stringify(m, null, 2) : '';
   return { role, text, thinks, extras, raw, at: ms(m.created_at) };
 }
-function readConv(conv, allBranches) {
+function readConv(conv, allBranches, showAll) {
   const src = conv.chat_messages || [];
-  const msgs = (allBranches ? src.slice().sort((a, b) => ms(a.created_at) - ms(b.created_at)) : lastBranch(src)).map(readMsg);
-  return { id: conv.uuid || '', title: conv.name || '（没有名字的窗口）', at: ms(conv.updated_at) || ms(conv.created_at), msgs,
+  let msgs = (allBranches ? src.slice().sort((a, b) => ms(a.created_at) - ms(b.created_at)) : lastBranch(src)).map(readMsg);
+  if (!showAll) msgs = msgs.filter((m) => m.text);   // 默认跟家里一个算法：没有正文的不显示、不算数
+  // 窗口的日子按里面第一句和最后一句算，不用官方那个「最后改动」的时间（改个名字它也会变）
+  const first = (msgs.find((m) => m.at) || {}).at || ms(conv.created_at);
+  const last = (msgs.slice().reverse().find((m) => m.at) || {}).at || ms(conv.updated_at) || ms(conv.created_at);
+  return { id: conv.uuid || '', title: conv.name || '（没有名字的窗口）', first, at: last, msgs,
     nMe: msgs.filter((x) => x.role === 'me').length, nAi: msgs.filter((x) => x.role === 'ai').length, nRaw: msgs.filter((x) => x.raw).length };
 }
-function readAll(data, allBranches) {
+function readAll(data, allBranches, showAll) {
   const arr = Array.isArray(data) ? data : data && Array.isArray(data.conversations) ? data.conversations : null;
   if (!arr) throw new Error('这份文件不是聊天记录的样子（里面应该是一串窗口）。');
-  return arr.filter((c) => c && Array.isArray(c.chat_messages)).map((c) => readConv(c, allBranches)).filter((c) => c.msgs.length).sort((a, b) => b.at - a.at);
+  return arr.filter((c) => c && Array.isArray(c.chat_messages)).map((c) => readConv(c, allBranches, showAll)).filter((c) => c.msgs.length).sort((a, b) => b.at - a.at);
 }
 /* ---------- 压缩包：不靠别的库，自己找出里面的 conversations.json ---------- */
 async function unzipConversations(file) {
@@ -156,7 +161,8 @@ if (typeof document !== 'undefined') (() => {
   const hm = (t) => (t ? new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '');
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const names = () => ({ me: $('nMe').value.trim() || '我', ai: $('nAi').value.trim() || '对方' });
-  function build() { convs = readAll(raw, $('allBr').checked); list(); }
+  function build() { convs = readAll(raw, $('allBr').checked, $('showAll').checked); list(); }
+  const span = (c) => { const a = day(c.first), b = day(c.at); return a && a !== b ? a + ' – ' + b : b; };
   function list() {
     const q = $('q').value.trim().toLowerCase(), box = $('list'); box.textContent = '';
     const hit = q ? convs.filter((c) => c.title.toLowerCase().includes(q) || c.msgs.some((m) => m.text.toLowerCase().includes(q))) : convs;
@@ -164,7 +170,7 @@ if (typeof document !== 'undefined') (() => {
     $('sum').textContent = `一共 ${convs.length} 个窗口、${tot} 条消息（${nm.me} ${convs.reduce((a, c) => a + c.nMe, 0)} 条，${nm.ai} ${convs.reduce((a, c) => a + c.nAi, 0)} 条）` + (q ? `；搜到 ${hit.length} 个窗口` : '');
     hit.forEach((c) => {
       const b = el('button', 'conv'); b.append(el('b', '', c.title));
-      const s = el('span', '', `${day(c.at)} · ${c.msgs.length} 条（${nm.me} ${c.nMe} / ${nm.ai} ${c.nAi}）`);
+      const s = el('span', '', `${span(c)} · ${c.msgs.length} 条（${nm.me} ${c.nMe} / ${nm.ai} ${c.nAi}）`);
       if (c.nRaw) s.append(el('span', 'warn', ` · ${c.nRaw} 条没读出文字，点进去能看原样`));
       b.append(s); b.onclick = () => open(c); box.append(b);
     });
@@ -197,7 +203,7 @@ if (typeof document !== 'undefined') (() => {
     cur.msgs.forEach((m) => { out.push(`【${m.role === 'me' ? nm.me : nm.ai}】${m.at ? ' ' + day(m.at) + ' ' + hm(m.at) : ''}`); m.thinks.forEach((t) => out.push('（思考）' + t)); if (m.text) out.push(m.text); m.extras.forEach((t) => out.push(t)); out.push(''); });
     const a = el('a'); a.href = URL.createObjectURL(new Blob([out.join('\n')], { type: 'text/plain;charset=utf-8' })); a.download = (cur.title || '聊天记录').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) + '.txt'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
-  $('q').oninput = list; $('nMe').oninput = $('nAi').oninput = () => { if (raw) list(); }; $('allBr').onchange = () => { if (raw) build(); };
+  $('q').oninput = list; $('nMe').oninput = $('nAi').oninput = () => { if (raw) list(); }; $('allBr').onchange = $('showAll').onchange = () => { if (raw) build(); };
   $('file').onchange = async (ev) => {
     const fl = [...ev.target.files]; if (!fl.length) return;
     $('msg').textContent = '正在读，文件大的话要等一小会儿…'; $('listWrap').classList.add('hide');
