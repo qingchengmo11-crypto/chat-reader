@@ -49,9 +49,10 @@
   <section id="home">
     <div class="box">
       <p>选官方导出的那份文件，就能把每个窗口的对话完整读出来，包括对方的回复和思考。</p>
+      <p class="dim">官方导出会给好几个压缩包，聊天记录是名字里带 conversations 的那个，一般最大。分成好几份的话可以一次全选。</p>
       <p class="dim">文件只在你这台设备里读，不会上传到任何地方。这个页面不联网也能用。</p>
-      <label class="btn go" id="pick">选文件（导出的 .zip 或里面的 conversations.json）
-        <input id="file" type="file" accept=".zip,.json,application/zip,application/json" class="hide">
+      <label class="btn go" id="pick">选文件（名字里带 conversations 的那个 .zip）
+        <input id="file" type="file" accept=".zip,.json,application/zip,application/json" multiple class="hide">
       </label>
       <div class="names">
         <label>我这边显示成<input id="nMe" type="text" value="我"></label>
@@ -125,19 +126,24 @@ async function unzipConversations(file) {
   const cdSize = u32(tail, e + 12), cdOff = u32(tail, e + 16);
   if (cdOff === 0xffffffff) throw new Error('这个压缩包太大了。请先把它解压，再选里面的 conversations.json。');
   const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer()), dec = new TextDecoder();
-  let hit = null;
+  // 新的官方导出里文件叫 conversations-000.json，还可能分成好几份；老的叫 conversations.json。都认
+  const hits = [];
   for (let p = 0; p + 46 <= cd.byteLength && u32(cd, p) === 0x02014b50;) {
     const n = u16(cd, p + 28), x = u16(cd, p + 30), k = u16(cd, p + 32);
     const name = dec.decode(new Uint8Array(cd.buffer, p + 46, n));
-    if (/(^|\/)conversations\.json$/i.test(name)) { hit = { method: u16(cd, p + 10), csize: u32(cd, p + 20), off: u32(cd, p + 42) }; break; }
+    if (/(^|\/)conversations(-\d+)?\.json$/i.test(name)) hits.push({ method: u16(cd, p + 10), csize: u32(cd, p + 20), off: u32(cd, p + 42) });
     p += 46 + n + x + k;
   }
-  if (!hit) throw new Error('压缩包里没找到 conversations.json。');
-  const lh = new DataView(await file.slice(hit.off, hit.off + 30).arrayBuffer());
-  const start = hit.off + 30 + u16(lh, 26) + u16(lh, 28), body = file.slice(start, start + hit.csize);
-  if (hit.method === 0) return await body.text();
-  if (hit.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('这台设备解不开这个压缩包。请先把它解压，再选里面的 conversations.json。');
-  return await new Response(body.stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+  if (!hits.length) throw new Error('「' + file.name + '」里没找到聊天记录。这个包可能是记忆或项目的，换名字里带 conversations 的那个试试。');
+  const out = [];
+  for (const hit of hits) {
+    const lh = new DataView(await file.slice(hit.off, hit.off + 30).arrayBuffer());
+    const start = hit.off + 30 + u16(lh, 26) + u16(lh, 28), body = file.slice(start, start + hit.csize);
+    if (hit.method === 0) { out.push(await body.text()); continue; }
+    if (hit.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('这台设备解不开这个压缩包。请先把它解压，再选里面 conversations 开头的 .json。');
+    out.push(await new Response(body.stream().pipeThrough(new DecompressionStream('deflate-raw'))).text());
+  }
+  return out;
 }
 /* ---------- 页面 ---------- */
 if (typeof document !== 'undefined') (() => {
@@ -193,12 +199,21 @@ if (typeof document !== 'undefined') (() => {
   };
   $('q').oninput = list; $('nMe').oninput = $('nAi').oninput = () => { if (raw) list(); }; $('allBr').onchange = () => { if (raw) build(); };
   $('file').onchange = async (ev) => {
-    const f = ev.target.files[0]; if (!f) return;
+    const fl = [...ev.target.files]; if (!fl.length) return;
     $('msg').textContent = '正在读，文件大的话要等一小会儿…'; $('listWrap').classList.add('hide');
     try {
-      const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
-      const txt = head[0] === 0x50 && head[1] === 0x4b ? await unzipConversations(f) : await f.text();
-      raw = JSON.parse(txt); build();
+      // 可以一次选好几个（导出分成好几份的时候）；同一个窗口出现两次只留消息多的那份
+      const byId = new Map(); let k = 0;
+      for (const f of fl) {
+        const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+        const txts = head[0] === 0x50 && head[1] === 0x4b ? await unzipConversations(f) : [await f.text()];
+        for (const t of txts) {
+          const d = JSON.parse(t), arr = Array.isArray(d) ? d : d && Array.isArray(d.conversations) ? d.conversations : null;
+          if (!arr) throw new Error('「' + f.name + '」不是聊天记录的样子（里面应该是一串窗口）。');
+          for (const c of arr) { const id = (c && c.uuid) || 'n' + k++; const old = byId.get(id); if (!old || ((c.chat_messages || []).length > (old.chat_messages || []).length)) byId.set(id, c); }
+        }
+      }
+      raw = [...byId.values()]; build();
       $('msg').textContent = convs.length ? '读好了。' : '读是读了，但里面一个有内容的窗口都没有。';
     } catch (e) { raw = null; $('msg').textContent = '没读成：' + (e && e.message ? e.message : e); }
   };
