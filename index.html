@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>聊天记录阅读器</title>
+<style>
+  :root { --bg: #faf6f1; --card: #ffffff; --line: #eadfd3; --text: #2f2a26; --dim: #8d8379; --me: #f6dfe0; --ai: #ffffff; --accent: #c7798a; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1d1a19; --card: #282423; --line: #3a3432; --text: #f1ebe6; --dim: #a39a92; --me: #54383f; --ai: #2c2827; --accent: #e3a0ae; } }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.7 -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px; display: flex; align-items: center; gap: 10px; }
+  header h1 { flex: 1; min-width: 0; margin: 0; font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button, .btn { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--card); color: var(--text); border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+  button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { max-width: 760px; margin: 0 auto; padding: 14px 14px calc(env(safe-area-inset-bottom, 0px) + 40px); }
+  .hide { display: none !important; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; margin-bottom: 14px; }
+  .box p { margin: 0 0 10px; } .box p:last-child { margin: 0; }
+  .dim { color: var(--dim); font-size: 13.5px; }
+  .names { display: flex; gap: 10px; margin-top: 12px; }
+  .names label { flex: 1; font-size: 13px; color: var(--dim); }
+  input[type=text], input[type=search] { width: 100%; font: inherit; font-size: 16px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; margin-top: 4px; }
+  #pick { display: block; width: 100%; text-align: center; padding: 14px; border-radius: 14px; font-size: 16px; }
+  #msg { white-space: pre-wrap; margin-top: 12px; }
+  .conv { display: block; width: 100%; text-align: left; border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; }
+  .conv b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .conv span { color: var(--dim); font-size: 12.5px; }
+  .conv .warn { color: var(--accent); }
+  .row { display: flex; flex-direction: column; margin: 12px 0; }
+  .row.me { align-items: flex-end; }
+  .who { font-size: 12px; color: var(--dim); margin: 0 6px 3px; }
+  .bub { max-width: 88%; background: var(--ai); border: 1px solid var(--line); border-radius: 18px; padding: 10px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .row.me .bub { background: var(--me); border-color: transparent; }
+  details { max-width: 88%; margin: 0 0 6px; border: 1px dashed var(--line); border-radius: 14px; padding: 6px 12px; color: var(--dim); font-size: 14px; }
+  details pre, details div { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 2px; font: inherit; }
+  summary { cursor: pointer; }
+  .day { text-align: center; color: var(--dim); font-size: 12.5px; margin: 20px 0 6px; }
+  #more { display: block; margin: 16px auto; }
+</style>
+</head>
+<body>
+<header>
+  <button id="back" class="hide">‹ 返回</button>
+  <h1 id="title">聊天记录阅读器</h1>
+  <button id="save" class="hide">存成文本</button>
+</header>
+<main>
+  <section id="home">
+    <div class="box">
+      <p>选官方导出的那份文件，就能把每个窗口的对话完整读出来，包括对方的回复和思考。</p>
+      <p class="dim">文件只在你这台设备里读，不会上传到任何地方。这个页面不联网也能用。</p>
+      <label class="btn go" id="pick">选文件（导出的 .zip 或里面的 conversations.json）
+        <input id="file" type="file" accept=".zip,.json,application/zip,application/json" class="hide">
+      </label>
+      <div class="names">
+        <label>我这边显示成<input id="nMe" type="text" value="我"></label>
+        <label>对方显示成<input id="nAi" type="text" value="对方"></label>
+      </div>
+      <label class="dim" style="display:block;margin-top:12px"><input id="allBr" type="checkbox"> 把重试过、改过的旧版本也一起显示（默认只显示最后留下的那一版）</label>
+      <div id="msg" class="dim"></div>
+    </div>
+    <div id="listWrap" class="hide">
+      <input id="q" type="search" placeholder="搜窗口名字或聊天内容">
+      <p class="dim" id="sum" style="margin:10px 4px"></p>
+      <div id="list"></div>
+    </div>
+  </section>
+  <section id="chat" class="hide"><div id="log"></div><button id="more" class="hide">再往下显示</button></section>
+</main>
+<script>
+/* ---------- 读文件：纯函数，不碰页面 ---------- */
+const ms = (v) => (typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : Date.parse(v || '') || 0);
+// 重试 / 改过的话会让一段对话分岔。默认只留最后在用的那一支；没有分岔信息就原样全留
+function lastBranch(all) {
+  if (!all.length || !all.some((m) => m.parent_message_uuid)) return all;
+  const byId = new Map(all.map((m) => [m.uuid, m]));
+  const leaf = all.reduce((a, m) => (ms(m.created_at) >= ms(a.created_at) ? m : a));
+  const chain = [];
+  for (let m = leaf; m; m = byId.get(m.parent_message_uuid)) { chain.push(m); if (chain.length > all.length) break; }
+  return chain.reverse();
+}
+const str = (v) => (v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v, null, 2));
+// 一条消息拆成：正文、思考、别的东西（工具、长文档之类）。正文两栏都看：先看细的那栏，没有再看简单的那栏
+function readMsg(m) {
+  const texts = [], thinks = [], extras = [];
+  for (const c of Array.isArray(m.content) ? m.content : []) {
+    if (!c || typeof c !== 'object') continue;
+    if (c.type === 'text') { if (c.text) texts.push(c.text); }
+    else if (c.type === 'thinking' || c.type === 'redacted_thinking') { if (c.thinking || c.text) thinks.push(c.thinking || c.text); }
+    else if (c.type === 'tool_use') extras.push('【用了工具：' + (c.name || '') + '】\n' + str(c.input));
+    else if (c.type === 'tool_result') extras.push('【工具结果' + (c.name ? '：' + c.name : '') + '】\n' + str(Array.isArray(c.content) ? c.content.map((x) => (x && x.text) || str(x)).join('\n') : c.content));
+    else extras.push('【' + (c.type || '别的内容') + '】\n' + str(c.text || c));
+  }
+  let text = (texts.length ? texts.join('\n\n') : str(m.text)).trim();
+  for (const f of m.attachments || []) {
+    if (!f || (!f.file_name && !f.extracted_content)) continue;
+    const body = str(f.extracted_content).trim();
+    text += (text ? '\n' : '') + (body ? '〔附件：' + (f.file_name || '文件') + '〕\n' + body : '（附件：' + f.file_name + '）');
+  }
+  const pics = (m.files || []).map((f) => f && f.file_name).filter(Boolean);
+  if (pics.length) text += (text ? '\n' : '') + '（图片：' + pics.join('、') + '，官方导出不带图）';
+  const role = m.sender === 'human' || m.sender === 'user' ? 'me' : 'ai';
+  // 什么都没读出来的也不丢：留一条空壳，带着原样，点开能看
+  const raw = !text && !thinks.length && !extras.length ? JSON.stringify(m, null, 2) : '';
+  return { role, text, thinks, extras, raw, at: ms(m.created_at) };
+}
+function readConv(conv, allBranches) {
+  const src = conv.chat_messages || [];
+  const msgs = (allBranches ? src.slice().sort((a, b) => ms(a.created_at) - ms(b.created_at)) : lastBranch(src)).map(readMsg);
+  return { id: conv.uuid || '', title: conv.name || '（没有名字的窗口）', at: ms(conv.updated_at) || ms(conv.created_at), msgs,
+    nMe: msgs.filter((x) => x.role === 'me').length, nAi: msgs.filter((x) => x.role === 'ai').length, nRaw: msgs.filter((x) => x.raw).length };
+}
+function readAll(data, allBranches) {
+  const arr = Array.isArray(data) ? data : data && Array.isArray(data.conversations) ? data.conversations : null;
+  if (!arr) throw new Error('这份文件不是聊天记录的样子（里面应该是一串窗口）。');
+  return arr.filter((c) => c && Array.isArray(c.chat_messages)).map((c) => readConv(c, allBranches)).filter((c) => c.msgs.length).sort((a, b) => b.at - a.at);
+}
+/* ---------- 压缩包：不靠别的库，自己找出里面的 conversations.json ---------- */
+async function unzipConversations(file) {
+  const u16 = (d, o) => d.getUint16(o, true), u32 = (d, o) => d.getUint32(o, true);
+  const tailLen = Math.min(file.size, 70000), tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
+  let e = -1; for (let i = tailLen - 22; i >= 0; i--) if (u32(tail, i) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('这个压缩包我读不懂。请先把它解压，再选里面的 conversations.json。');
+  const cdSize = u32(tail, e + 12), cdOff = u32(tail, e + 16);
+  if (cdOff === 0xffffffff) throw new Error('这个压缩包太大了。请先把它解压，再选里面的 conversations.json。');
+  const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer()), dec = new TextDecoder();
+  let hit = null;
+  for (let p = 0; p + 46 <= cd.byteLength && u32(cd, p) === 0x02014b50;) {
+    const n = u16(cd, p + 28), x = u16(cd, p + 30), k = u16(cd, p + 32);
+    const name = dec.decode(new Uint8Array(cd.buffer, p + 46, n));
+    if (/(^|\/)conversations\.json$/i.test(name)) { hit = { method: u16(cd, p + 10), csize: u32(cd, p + 20), off: u32(cd, p + 42) }; break; }
+    p += 46 + n + x + k;
+  }
+  if (!hit) throw new Error('压缩包里没找到 conversations.json。');
+  const lh = new DataView(await file.slice(hit.off, hit.off + 30).arrayBuffer());
+  const start = hit.off + 30 + u16(lh, 26) + u16(lh, 28), body = file.slice(start, start + hit.csize);
+  if (hit.method === 0) return await body.text();
+  if (hit.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('这台设备解不开这个压缩包。请先把它解压，再选里面的 conversations.json。');
+  return await new Response(body.stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+}
+/* ---------- 页面 ---------- */
+if (typeof document !== 'undefined') (() => {
+  const $ = (id) => document.getElementById(id);
+  let raw = null, convs = [], cur = null, shown = 0;
+  // 链接后面可以带名字：?me=我&ai=对方的名字，打开就填好了
+  try { const u = new URLSearchParams(location.search); if (u.get('me')) $('nMe').value = u.get('me').slice(0, 20); if (u.get('ai')) $('nAi').value = u.get('ai').slice(0, 20); } catch (e) {}
+  const PAGE = 300;
+  const day = (t) => (t ? new Date(t).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '');
+  const hm = (t) => (t ? new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '');
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const names = () => ({ me: $('nMe').value.trim() || '我', ai: $('nAi').value.trim() || '对方' });
+  function build() { convs = readAll(raw, $('allBr').checked); list(); }
+  function list() {
+    const q = $('q').value.trim().toLowerCase(), box = $('list'); box.textContent = '';
+    const hit = q ? convs.filter((c) => c.title.toLowerCase().includes(q) || c.msgs.some((m) => m.text.toLowerCase().includes(q))) : convs;
+    const tot = convs.reduce((a, c) => a + c.msgs.length, 0), nm = names();
+    $('sum').textContent = `一共 ${convs.length} 个窗口、${tot} 条消息（${nm.me} ${convs.reduce((a, c) => a + c.nMe, 0)} 条，${nm.ai} ${convs.reduce((a, c) => a + c.nAi, 0)} 条）` + (q ? `；搜到 ${hit.length} 个窗口` : '');
+    hit.forEach((c) => {
+      const b = el('button', 'conv'); b.append(el('b', '', c.title));
+      const s = el('span', '', `${day(c.at)} · ${c.msgs.length} 条（${nm.me} ${c.nMe} / ${nm.ai} ${c.nAi}）`);
+      if (c.nRaw) s.append(el('span', 'warn', ` · ${c.nRaw} 条没读出文字，点进去能看原样`));
+      b.append(s); b.onclick = () => open(c); box.append(b);
+    });
+    $('listWrap').classList.remove('hide');
+  }
+  function open(c) {
+    cur = c; shown = 0; $('log').textContent = ''; $('title').textContent = c.title;
+    ['home'].forEach((i) => $(i).classList.add('hide')); ['chat', 'back', 'save'].forEach((i) => $(i).classList.remove('hide'));
+    more(); scrollTo(0, 0);
+  }
+  function more() {
+    const nm = names(), log = $('log'); let last = shown ? day(cur.msgs[shown - 1].at) : '';
+    cur.msgs.slice(shown, shown + PAGE).forEach((m) => {
+      const d = day(m.at); if (d && d !== last) { log.append(el('div', 'day', d)); last = d; }
+      const r = el('div', 'row ' + m.role); r.append(el('div', 'who', (m.role === 'me' ? nm.me : nm.ai) + (m.at ? ' · ' + hm(m.at) : '')));
+      m.thinks.forEach((t) => { const x = el('details'); x.append(el('summary', '', '思考'), el('div', '', t)); r.append(x); });
+      if (m.text) r.append(el('div', 'bub', m.text));
+      m.extras.forEach((t) => { const x = el('details'); x.append(el('summary', '', t.split('\n')[0]), el('pre', '', t.split('\n').slice(1).join('\n'))); r.append(x); });
+      if (m.raw) { const x = el('details'); x.append(el('summary', '', '这条没读出文字，点开看文件里的原样'), el('pre', '', m.raw)); r.append(x); }
+      log.append(r);
+    });
+    shown = Math.min(cur.msgs.length, shown + PAGE);
+    $('more').classList.toggle('hide', shown >= cur.msgs.length);
+    $('more').textContent = `再往下显示（还有 ${cur.msgs.length - shown} 条）`;
+  }
+  $('more').onclick = more;
+  $('back').onclick = () => { ['chat', 'back', 'save'].forEach((i) => $(i).classList.add('hide')); $('home').classList.remove('hide'); $('title').textContent = '聊天记录阅读器'; };
+  $('save').onclick = () => {
+    const nm = names(), out = [cur.title, ''];
+    cur.msgs.forEach((m) => { out.push(`【${m.role === 'me' ? nm.me : nm.ai}】${m.at ? ' ' + day(m.at) + ' ' + hm(m.at) : ''}`); m.thinks.forEach((t) => out.push('（思考）' + t)); if (m.text) out.push(m.text); m.extras.forEach((t) => out.push(t)); out.push(''); });
+    const a = el('a'); a.href = URL.createObjectURL(new Blob([out.join('\n')], { type: 'text/plain;charset=utf-8' })); a.download = (cur.title || '聊天记录').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60) + '.txt'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  $('q').oninput = list; $('nMe').oninput = $('nAi').oninput = () => { if (raw) list(); }; $('allBr').onchange = () => { if (raw) build(); };
+  $('file').onchange = async (ev) => {
+    const f = ev.target.files[0]; if (!f) return;
+    $('msg').textContent = '正在读，文件大的话要等一小会儿…'; $('listWrap').classList.add('hide');
+    try {
+      const head = new Uint8Array(await f.slice(0, 4).arrayBuffer());
+      const txt = head[0] === 0x50 && head[1] === 0x4b ? await unzipConversations(f) : await f.text();
+      raw = JSON.parse(txt); build();
+      $('msg').textContent = convs.length ? '读好了。' : '读是读了，但里面一个有内容的窗口都没有。';
+    } catch (e) { raw = null; $('msg').textContent = '没读成：' + (e && e.message ? e.message : e); }
+  };
+})();
+</script>
+</body>
+</html>
